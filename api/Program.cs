@@ -1,13 +1,16 @@
 using System.Collections.Concurrent;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.Identity.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddMicrosoftIdentityWebApiAuthentication(builder.Configuration);
 
+builder.Services.AddTransient<IClaimsTransformation, PermissionClaimsTransformation>();
 builder.Services.AddAuthorizationBuilder()
-    .AddPolicy("TodoRead", p => p.RequireRole("Admin", "User"))
-    .AddPolicy("TodoWrite", p => p.RequireRole("Admin"));
+    .AddPolicy(Permissions.TodosRead, p => p.RequireClaim(Permissions.ClaimType, Permissions.TodosRead))
+    .AddPolicy(Permissions.TodosWrite, p => p.RequireClaim(Permissions.ClaimType, Permissions.TodosWrite));
 
 var origins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod()));
@@ -22,29 +25,66 @@ app.UseAuthorization();
 
 app.MapGet("/", () => "Todo API");
 
+app.MapGet("/api/permissions", (ClaimsPrincipal user) => new
+{
+    Roles = user.FindAll(PermissionClaimsTransformation.IsRole).Select(c => c.Value).Distinct().Order(),
+    Permissions = user.FindAll(Permissions.ClaimType).Select(c => c.Value).Distinct().Order(),
+}).RequireAuthorization();
+
 var todos = app.MapGroup("/api/todos");
 
-todos.MapGet("/", (TodoStore s) => s.All()).RequireAuthorization("TodoRead");
+todos.MapGet("/", (TodoStore s) => s.All()).RequireAuthorization(Permissions.TodosRead);
 todos.MapGet("/{id:guid}", (Guid id, TodoStore s) => s.Get(id) is { } t ? Results.Ok(t) : Results.NotFound())
-    .RequireAuthorization("TodoRead");
+    .RequireAuthorization(Permissions.TodosRead);
 
 todos.MapPost("/", (TodoInput input, TodoStore s) =>
 {
     if (string.IsNullOrWhiteSpace(input.Title)) return Results.BadRequest("Title is required.");
     var t = s.Add(input);
     return Results.Created($"/api/todos/{t.Id}", t);
-}).RequireAuthorization("TodoWrite");
+}).RequireAuthorization(Permissions.TodosWrite);
 
 todos.MapPut("/{id:guid}", (Guid id, TodoInput input, TodoStore s) =>
 {
     if (string.IsNullOrWhiteSpace(input.Title)) return Results.BadRequest("Title is required.");
     return s.Update(id, input) is { } t ? Results.Ok(t) : Results.NotFound();
-}).RequireAuthorization("TodoWrite");
+}).RequireAuthorization(Permissions.TodosWrite);
 
 todos.MapDelete("/{id:guid}", (Guid id, TodoStore s) => s.Remove(id) ? Results.NoContent() : Results.NotFound())
-    .RequireAuthorization("TodoWrite");
+    .RequireAuthorization(Permissions.TodosWrite);
 
 app.Run();
+
+static class Permissions
+{
+    public const string ClaimType = "permission";
+    public const string TodosRead = "todos:read";
+    public const string TodosWrite = "todos:write";
+
+    public static readonly IReadOnlyDictionary<string, string[]> ByRole = new Dictionary<string, string[]>
+    {
+        ["Admin"] = [TodosRead, TodosWrite],
+        ["User"] = [TodosRead],
+    };
+}
+
+class PermissionClaimsTransformation : IClaimsTransformation
+{
+    public static bool IsRole(Claim c) => c.Type is "roles" or ClaimTypes.Role;
+
+    public Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal)
+    {
+        if (principal.Identity is not ClaimsIdentity identity || !identity.IsAuthenticated
+            || identity.HasClaim(c => c.Type == Permissions.ClaimType))
+            return Task.FromResult(principal);
+
+        var permissions = principal.Claims.Where(IsRole)
+            .SelectMany(c => Permissions.ByRole.GetValueOrDefault(c.Value) ?? [])
+            .Distinct();
+        foreach (var p in permissions) identity.AddClaim(new Claim(Permissions.ClaimType, p));
+        return Task.FromResult(principal);
+    }
+}
 
 record Todo(Guid Id, string Title, bool IsDone);
 record TodoInput(string Title, bool IsDone);
