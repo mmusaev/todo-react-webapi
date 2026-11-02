@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AuthenticatedTemplate, UnauthenticatedTemplate, useMsal } from "@azure/msal-react";
 import { apiScopes } from "./authConfig";
-import { Todo, call, getToken, rolesFromToken } from "./api";
+import { Todo, Permissions, call, getToken } from "./api";
 
 function Todos() {
   const { instance, accounts } = useMsal();
@@ -10,9 +10,10 @@ function Todos() {
   const [title, setTitle] = useState("");
   const [editing, setEditing] = useState<Todo>();
   const [error, setError] = useState<string>();
+  const [perms, setPerms] = useState<Permissions>({ roles: [], permissions: [] });
 
-  const roles = token ? rolesFromToken(token) : [];
-  const isAdmin = roles.includes("Admin");
+  const roles = perms.roles;
+  const canWrite = perms.permissions.includes("todos:write");
 
   const load = useCallback(async (t: string) => {
     try {
@@ -26,6 +27,7 @@ function Todos() {
   useEffect(() => {
     getToken(instance).then((t) => {
       setToken(t);
+      call<Permissions>(t, "/api/permissions").then(setPerms).catch((e) => setError(String(e)));
       load(t);
     }).catch((e) => setError(String(e)));
   }, [instance, load]);
@@ -58,7 +60,7 @@ function Todos() {
         <button onClick={() => instance.logoutRedirect()}>Sign out</button>
       </p>
       {error && <p style={{ color: "crimson" }}>{error}</p>}
-      {isAdmin && (
+      {canWrite && (
         <p>
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New todo" />{" "}
           <button disabled={!title.trim()} onClick={add}>Add</button>
@@ -74,9 +76,9 @@ function Todos() {
               </>
             ) : (
               <>
-                <input type="checkbox" checked={t.isDone} disabled={!isAdmin} onChange={() => toggle(t)} />{" "}
+                <input type="checkbox" checked={t.isDone} disabled={!canWrite} onChange={() => toggle(t)} />{" "}
                 <span style={{ textDecoration: t.isDone ? "line-through" : "none" }}>{t.title}</span>{" "}
-                {isAdmin && (
+                {canWrite && (
                   <>
                     <button onClick={() => setEditing(t)}>Edit</button> <button onClick={() => remove(t)}>Delete</button>
                   </>

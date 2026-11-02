@@ -19,9 +19,9 @@ export async function getToken(msal: IPublicClientApplication): Promise<string> 
   }
 }
 
-export function rolesFromToken(token: string): string[] {
-  const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
-  return payload.roles ?? [];
+export interface Permissions {
+  roles: string[];
+  permissions: string[];
 }
 
 export async function call<T>(token: string, path: string, method = "GET", body?: unknown): Promise<T> {
