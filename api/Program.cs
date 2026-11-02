@@ -81,8 +81,11 @@ class PermissionClaimsTransformation : IClaimsTransformation
         var permissions = principal.Claims.Where(IsRole)
             .SelectMany(c => Permissions.ByRole.GetValueOrDefault(c.Value) ?? [])
             .Distinct();
-        foreach (var p in permissions) identity.AddClaim(new Claim(Permissions.ClaimType, p));
-        return Task.FromResult(principal);
+        // Clone: the incoming principal may be shared across concurrent requests.
+        var clone = new ClaimsPrincipal(principal.Identities.Select(i => i.Clone()));
+        var cloned = (ClaimsIdentity)clone.Identity!;
+        foreach (var p in permissions) cloned.AddClaim(new Claim(Permissions.ClaimType, p));
+        return Task.FromResult(clone);
     }
 }
 
